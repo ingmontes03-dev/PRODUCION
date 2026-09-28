@@ -5,6 +5,7 @@
  * Requisitos previos en Supabase: ver auth-rls.sql (perfiles vinculados a auth.users y RLS solo para autenticados).
  * Los usuarios los crea únicamente el administrador en Authentication > Users; la app no permite registro.
  * profiles.id debe ser el UUID del usuario en auth.users.
+ * Panel de Control / Permisos (solo Programador): requiere panel-permisos.sql y la Edge Function admin-users.
  */
 import React, { useState, useEffect, useMemo } from 'react';
 import { createClient } from '@supabase/supabase-js';
@@ -12,6 +13,7 @@ import {
   LayoutDashboard, ClipboardList, Users, Package, DollarSign, Calculator, Truck,
   ShieldCheck, Factory, AlertTriangle, Plus, Trash2, Lock, CheckCircle2, XCircle,
   LogOut, Wrench, Clock, FileText, Image as ImageIcon, Loader2, LogIn, Activity, Target,
+  UserPlus, Code2, SlidersHorizontal, Receipt, Boxes,
 } from 'lucide-react';
 
 /* ───────────── Supabase ───────────── */
@@ -142,6 +144,11 @@ select.neo-in option{background:#1a2126;color:var(--txt)}
 .alert-pulse{animation:pulse-r 1.2s ease-in-out infinite}
 @keyframes pulse-r{0%,100%{box-shadow:0 0 0 rgba(255,77,109,0);opacity:1}50%{box-shadow:0 0 26px rgba(255,77,109,.7);opacity:.82}}
 a.lnk{color:var(--cy);text-decoration:underline;text-underline-offset:3px}
+.sw{position:relative;flex:none;width:46px;height:26px;border-radius:99px;background:#141a1e;box-shadow:inset 3px 3px 6px #0a0e10,inset -2px -2px 5px #1e282e;border:1px solid transparent;cursor:pointer;transition:border-color .2s}
+.sw>i{position:absolute;top:3px;left:3px;width:18px;height:18px;border-radius:50%;background:linear-gradient(145deg,#2c363d,#1c242a);box-shadow:2px 2px 5px #0a0e10;transition:transform .2s,background .2s,box-shadow .2s}
+.sw-on{border-color:rgba(0,242,254,.4)}
+.sw-on>i{transform:translateX(20px);background:linear-gradient(135deg,#00f2fe,#4facfe);box-shadow:0 0 12px rgba(0,242,254,.75)}
+.sw:disabled{opacity:.45;cursor:not-allowed}
 `;
 const Shell = ({ children }) => (<div className="neo-root"><style>{THEME}</style>{children}</div>);
 
@@ -482,11 +489,12 @@ function Empaque({ store, role }) {
 }
 
 /* ───────────── Calidad ───────────── */
-function Calidad({ store, role }) {
+function Calidad({ store, role, part }) {
   const [f, set, reset] = useForm({ orden_id: '', tipo: 'Defecto de marcación', operario: '', descripcion: '' });
   const add = async () => { if (!f.orden_id || !f.descripcion) return; const { error } = await store.nc.insert({ orden_id: num(f.orden_id), tipo: f.tipo, operario: f.operario, descripcion: f.descripcion, fecha: today() }); if (!error) reset(); };
   return (
     <div className="space-y-5">
+      {part !== 'consumos' && (
       <Card title="Reporte de no conformidades" icon={ShieldCheck}>
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <OpSel ordenes={store.ordenes.rows} value={f.orden_id} onChange={(v) => set('orden_id')({ target: { value: v } })} onlyOpen />
@@ -504,18 +512,19 @@ function Calidad({ store, role }) {
             ))}
           </Table>
         </div>
-      </Card>
-      <Empaque store={store} role={role} />
+      </Card>)}
+      {part !== 'calidad' && <Empaque store={store} role={role} />}
     </div>
   );
 }
 
 /* ───────────── Logística ───────────── */
-function Logistica({ store }) {
+function Logistica({ store, part }) {
   const [t, setT, resetT] = useForm({ orden_id: '', origen: '', destino: '', comprobante_url: '', fecha: today() });
   const [g, setG, resetG] = useForm({ orden_id: '', concepto: 'Flete', valor: '', fecha: today() });
   return (
     <div className="space-y-5">
+      {part !== 'gastos' && (
       <Card title="Registrar traslado" icon={Truck}>
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           <OpSel ordenes={store.ordenes.rows} value={t.orden_id} onChange={(v) => setT('orden_id')({ target: { value: v } })} onlyOpen />
@@ -528,7 +537,8 @@ function Logistica({ store }) {
           {store.traslados.rows.map((x) => <tr key={x.id}><td className="py-2 pr-4">{x.fecha}</td><td className="pr-4">{opLabel(store.ordenes.rows, x.orden_id)}</td><td className="pr-4">{x.origen}</td><td className="pr-4">{x.destino}</td>
             <td>{x.comprobante_url ? <a className="lnk" href={x.comprobante_url} target="_blank" rel="noreferrer">Ver</a> : '—'}</td></tr>)}
         </Table></div>
-      </Card>
+      </Card>)}
+      {part !== 'traslados' && (
       <Card title="Gastos de fletes y transporte" icon={DollarSign}>
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
           <OpSel ordenes={store.ordenes.rows} value={g.orden_id} onChange={(v) => setG('orden_id')({ target: { value: v } })} onlyOpen />
@@ -539,7 +549,7 @@ function Logistica({ store }) {
         <div className="mt-4"><Table heads={['Fecha', 'OP', 'Concepto', 'Valor']}>
           {store.gastos.rows.map((x) => <tr key={x.id}><td className="py-2 pr-4">{x.fecha}</td><td className="pr-4">{opLabel(store.ordenes.rows, x.orden_id)}</td><td className="pr-4">{x.concepto}</td><td>{cop(x.valor)}</td></tr>)}
         </Table></div>
-      </Card>
+      </Card>)}
     </div>
   );
 }
@@ -661,47 +671,217 @@ function Calc({ store }) {
   );
 }
 
-/* ───────────── Roles ───────────── */
+/* ───────────── Módulos, roles y permisos ───────────── */
+const MODULOS = [
+  { key: 'ordenes', label: 'Órdenes de producción' },
+  { key: 'maquila', label: 'Maquila' },
+  { key: 'inventario', label: 'Inventario' },
+  { key: 'finanzas', label: 'Finanzas' },
+  { key: 'gastos', label: 'Gastos' },
+  { key: 'consumos', label: 'Consumos e insumos' },
+  { key: 'traslados', label: 'Traslados' },
+  { key: 'calidad', label: 'Calidad' },
+  { key: 'taller', label: 'Taller externo' },
+];
+const ALL_KEYS = MODULOS.map((m) => m.key);
+// [id de pestaña, etiqueta, icono, módulo que la habilita]
+const TABS = [
+  ['dashboard', 'Indicadores', LayoutDashboard, 'ordenes'],
+  ['ops', 'Órdenes', ClipboardList, 'ordenes'],
+  ['calc', 'Calculadora', Calculator, 'ordenes'],
+  ['maquila', 'Maquila', Users, 'maquila'],
+  ['nomina', 'Nómina', DollarSign, 'maquila'],
+  ['inventario', 'Inventario', Package, 'inventario'],
+  ['consumos', 'Consumos e insumos', Boxes, 'consumos'],
+  ['finanzas', 'Finanzas', DollarSign, 'finanzas'],
+  ['gastos', 'Gastos', Receipt, 'gastos'],
+  ['traslados', 'Traslados', Truck, 'traslados'],
+  ['calidad', 'Calidad', ShieldCheck, 'calidad'],
+  ['taller', 'Costos y facturas', Wrench, 'taller'],
+];
+// Módulos por defecto de cada rol (se usan mientras el usuario no tenga modulos_permitidos guardado)
 const ROLES = {
-  admin: { label: 'Admin / Líder de planta', tabs: [['dashboard', 'Indicadores', LayoutDashboard], ['ops', 'Órdenes', ClipboardList], ['maquila', 'Maquila', Users], ['nomina', 'Nómina', DollarSign], ['inventario', 'Inventario', Package], ['finanzas', 'Finanzas', DollarSign], ['calc', 'Calculadora', Calculator]] },
-  mensajero: { label: 'Mensajero / Logística', tabs: [['logistica', 'Traslados y gastos', Truck]] },
-  calidad: { label: 'Inspector de calidad', tabs: [['calidad', 'Calidad y empaque', ShieldCheck], ['maquila', 'Maquila', Users], ['inventario', 'Inventario', Package]] },
-  taller: { label: 'Taller externo / Proveedor', tabs: [['taller', 'Costos y facturas', Wrench]] },
+  admin: { label: 'Admin / Líder de planta', mods: ALL_KEYS },
+  mensajero: { label: 'Mensajero / Logística', mods: ['traslados', 'gastos'] },
+  calidad: { label: 'Inspector de calidad', mods: ['calidad', 'consumos', 'maquila', 'inventario'] },
+  taller: { label: 'Taller externo / Proveedor', mods: ['taller'] },
+  superadmin: { label: 'Programador / SuperAdmin', mods: ALL_KEYS },
 };
 const normalizeRol = (r) => (r || '').toString().trim().toLowerCase();
+const isSuperProfile = (p) => p?.es_programador === true || normalizeRol(p?.rol) === 'superadmin';
+function modulosEfectivos(p) {
+  if (isSuperProfile(p)) return ALL_KEYS;
+  const mp = p?.modulos_permitidos;
+  if (Array.isArray(mp)) return ALL_KEYS.filter((k) => mp.includes(k));
+  if (mp && typeof mp === 'object') return ALL_KEYS.filter((k) => mp[k] === true);
+  return ROLES[normalizeRol(p?.rol)]?.mods || [];
+}
+const modsToObj = (mods) => Object.fromEntries(ALL_KEYS.map((k) => [k, mods.includes(k)]));
 const signOut = () => supabase.auth.signOut();
 
-/* ───────────── Login privado ───────────── */
-function Login() {
+/* ───────────── Login privado (con acceso Programador / Admin) ───────────── */
+function Login({ prog, setProg, notice, setNotice }) {
   const [email, setEmail] = useState(''); const [pass, setPass] = useState('');
   const [err, setErr] = useState(''); const [busy, setBusy] = useState(false);
   const entrar = async (e) => {
     e.preventDefault();
     if (!email.trim() || !pass) return setErr('Ingrese su correo y contraseña.');
-    setBusy(true); setErr('');
-    const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password: pass });
+    setBusy(true); setErr(''); setNotice('');
+    const { data, error } = await supabase.auth.signInWithPassword({ email: email.trim(), password: pass });
     if (error) {
       const m = error.message || '';
       setErr(/invalid login credentials/i.test(m) ? 'Correo o contraseña incorrectos.' : /not confirmed/i.test(m) ? 'Su cuenta aún no está confirmada. Contacte al administrador.' : m);
       setBusy(false);
+      return;
+    }
+    if (prog) {
+      const { data: p } = await supabase.from('profiles').select('es_programador, rol').eq('id', data.user.id).maybeSingle();
+      if (!isSuperProfile(p)) {
+        await supabase.auth.signOut();
+        setNotice('Esta cuenta no tiene permisos de Programador / SuperAdmin.');
+        setBusy(false);
+      }
     }
   };
+  const shown = err || notice;
   return (
     <div className="grid min-h-screen place-items-center px-4 py-10">
       <form onSubmit={entrar} className="neo w-full max-w-sm p-8">
         <div className="mb-6 text-center">
-          <span className="neo-icon mx-auto" style={{ width: 56, height: 56 }}><Factory size={26} /></span>
+          <span className="neo-icon mx-auto" style={{ width: 56, height: 56, color: prog ? '#00e676' : undefined }}>{prog ? <Code2 size={26} /> : <Factory size={26} />}</span>
           <h1 className="glow-t mt-4 text-2xl font-extrabold">Planta OP</h1>
-          <p className="mut mt-1 text-sm">Acceso privado · inicie sesión para continuar</p>
+          <p className="mut mt-1 text-sm">{prog ? 'Acceso de Programador / SuperAdmin' : 'Acceso privado · inicie sesión para continuar'}</p>
+          {prog && <div className="mt-3"><Pill ok><Code2 size={11} />Modo Programador</Pill></div>}
         </div>
         <div className="space-y-4">
           <Inp label="Correo electrónico" type="email" autoComplete="email" placeholder="usuario@empresa.com" value={email} onChange={(e) => setEmail(e.target.value)} />
           <Inp label="Contraseña" type="password" autoComplete="current-password" placeholder="••••••••" value={pass} onChange={(e) => setPass(e.target.value)} />
         </div>
-        {err && <p role="alert" className="mt-4 text-sm" style={{ color: '#ff8fa3' }}>{err}</p>}
-        <Btn type="submit" disabled={busy} className="mt-6 w-full">{busy ? <Loader2 size={16} className="animate-spin" /> : <LogIn size={16} />}{busy ? 'Ingresando…' : 'Ingresar'}</Btn>
-        <p className="mut mt-5 text-center text-xs">¿Sin cuenta? Solicítela al administrador.</p>
+        {shown && <p role="alert" className="mt-4 text-sm" style={{ color: '#ff8fa3' }}>{shown}</p>}
+        <Btn type="submit" v={prog ? 'acc' : 'pri'} disabled={busy} className="mt-6 w-full">
+          {busy ? <Loader2 size={16} className="animate-spin" /> : <LogIn size={16} />}{busy ? 'Ingresando…' : prog ? 'Ingresar como Programador' : 'Ingresar'}
+        </Btn>
+        <button type="button" onClick={() => { setProg(!prog); setErr(''); setNotice(''); }}
+          className="mt-5 flex w-full items-center justify-center gap-1.5 text-xs font-semibold" style={{ color: prog ? '#00e676' : 'var(--mut)' }}>
+          <Code2 size={14} />{prog ? 'Volver al acceso normal' : 'Acceso Programador / Admin'}
+        </button>
+        {!prog && <p className="mut mt-3 text-center text-xs">¿Sin cuenta? Solicítela al administrador.</p>}
       </form>
+    </div>
+  );
+}
+
+/* ───────────── Panel de Control / Permisos (solo Programador) ───────────── */
+const Switch = ({ on, onChange, disabled, label }) => (
+  <button type="button" role="switch" aria-checked={on} aria-label={label} disabled={disabled} onClick={onChange} className={cx('sw', on && 'sw-on')}><i /></button>
+);
+
+async function fnErrorMessage(error) {
+  let m = error?.message || 'Error desconocido';
+  try { const j = await error.context.json(); if (j?.error) m = j.error; } catch { /* sin cuerpo JSON */ }
+  if (/failed to send|not found|404|non-2xx/i.test(m) && !/ya|existe|registrad/i.test(m)) m += ' — verifique que la Edge Function "admin-users" esté desplegada en Supabase.';
+  return m;
+}
+
+function PanelControl() {
+  const [users, setUsers] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [loadErr, setLoadErr] = useState('');
+  const [draft, setDraft] = useState({}); // id -> arreglo de módulos editados
+  const [saving, setSaving] = useState('');
+  const [msg, setMsg] = useState(null);
+  const [creating, setCreating] = useState(false);
+  const [f, set, reset] = useForm({ email: '', password: '', nombre: '', rol: 'mensajero' });
+
+  const load = async () => {
+    const { data, error } = await supabase.from('profiles').select('*').order('nombre');
+    if (error) setLoadErr(error.message); else { setUsers(data || []); setLoadErr(''); }
+    setLoading(false);
+  };
+  useEffect(() => { load(); }, []);
+
+  const toggle = (u, key) => setDraft((d) => {
+    const cur = d[u.id] ?? modulosEfectivos(u);
+    return { ...d, [u.id]: cur.includes(key) ? cur.filter((k) => k !== key) : [...cur, key] };
+  });
+
+  const guardar = async (u) => {
+    const mods = draft[u.id] ?? modulosEfectivos(u);
+    setSaving(u.id); setMsg(null);
+    const { data, error } = await supabase.from('profiles').update({ modulos_permitidos: modsToObj(mods) }).eq('id', u.id).select();
+    if (error || !data?.length) {
+      setMsg({ e: true, t: error ? error.message : 'No se guardó: revise la política de actualización de profiles (panel-permisos.sql).' });
+    } else {
+      setUsers((us) => us.map((x) => (x.id === u.id ? data[0] : x)));
+      setDraft((d) => { const n = { ...d }; delete n[u.id]; return n; });
+      setMsg({ e: false, t: `Permisos de ${u.nombre || 'usuario'} guardados.` });
+    }
+    setSaving('');
+  };
+
+  const crear = async (e) => {
+    e.preventDefault();
+    const email = f.email.trim(); const nombre = f.nombre.trim();
+    if (!/^\S+@\S+\.\S+$/.test(email)) return setMsg({ e: true, t: 'Ingrese un correo válido.' });
+    if (f.password.length < 6) return setMsg({ e: true, t: 'La contraseña debe tener al menos 6 caracteres.' });
+    if (!nombre) return setMsg({ e: true, t: 'Ingrese el nombre del usuario.' });
+    setCreating(true); setMsg(null);
+    const esSuper = f.rol === 'superadmin';
+    const { data, error } = await supabase.functions.invoke('admin-users', {
+      body: { action: 'create', email, password: f.password, nombre, rol: f.rol, es_programador: esSuper, modulos_permitidos: esSuper ? null : modsToObj(ROLES[f.rol].mods) },
+    });
+    const m = error ? await fnErrorMessage(error) : data?.error;
+    if (m) setMsg({ e: true, t: m });
+    else { setMsg({ e: false, t: `Usuario ${email} creado. Ya puede iniciar sesión.` }); reset(); await load(); }
+    setCreating(false);
+  };
+
+  return (
+    <div className="space-y-5">
+      <Card title="Crear usuario" icon={UserPlus}>
+        <form onSubmit={crear} className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+          <Inp label="Correo electrónico" type="email" autoComplete="off" placeholder="usuario@empresa.com" value={f.email} onChange={set('email')} />
+          <Inp label="Contraseña (mín. 6)" type="password" autoComplete="new-password" value={f.password} onChange={set('password')} />
+          <Inp label="Nombre" value={f.nombre} onChange={set('nombre')} />
+          <Sel label="Rol" value={f.rol} onChange={set('rol')}>{Object.entries(ROLES).map(([k, r]) => <option key={k} value={k}>{r.label}</option>)}</Sel>
+          <div className="flex items-end"><Btn type="submit" disabled={creating} className="w-full">{creating ? <Loader2 size={15} className="animate-spin" /> : <UserPlus size={15} />}Crear usuario</Btn></div>
+        </form>
+        <p className="mut mt-3 text-xs">Los módulos iniciales dependen del rol; luego puede ajustarlos en la matriz. Un SuperAdmin siempre tiene acceso total.</p>
+        {msg && <p role="status" className="mt-3 text-sm" style={{ color: msg.e ? '#ff8fa3' : '#00e676' }}>{msg.t}</p>}
+      </Card>
+
+      <Card title="Matriz de permisos por módulo" icon={SlidersHorizontal}>
+        {loadErr && <p className="mb-3 text-sm" style={{ color: '#ff8fa3' }}>Error al cargar usuarios: {loadErr}</p>}
+        {loading ? (
+          <div className="mut flex items-center gap-2 text-sm"><Loader2 size={15} className="animate-spin" />Cargando usuarios…</div>
+        ) : (
+          <Table heads={['Usuario', 'Rol', ...MODULOS.map((m) => m.label), '']} empty="No hay usuarios registrados.">
+            {users.map((u) => {
+              const sup = isSuperProfile(u);
+              const base = modulosEfectivos(u);
+              const cur = draft[u.id] ?? base;
+              const dirty = !sup && (cur.length !== base.length || cur.some((k) => !base.includes(k)));
+              return (
+                <tr key={u.id}>
+                  <td className="py-3 pr-4 font-bold">{u.nombre || '—'}<div className="mut text-xs font-normal">{String(u.id).slice(0, 8)}…</div></td>
+                  <td className="pr-4">{sup ? <Pill ok><Code2 size={11} />SuperAdmin</Pill> : <Pill>{ROLES[normalizeRol(u.rol)]?.label || u.rol || '—'}</Pill>}</td>
+                  {MODULOS.map((m) => (
+                    <td key={m.key} className="pr-4">
+                      <Switch on={sup || cur.includes(m.key)} disabled={sup} label={`${m.label} para ${u.nombre || 'usuario'}`} onChange={() => toggle(u, m.key)} />
+                    </td>
+                  ))}
+                  <td>
+                    <Btn v={dirty ? 'acc' : 'ghost'} disabled={!dirty || saving === u.id} onClick={() => guardar(u)}>
+                      {saving === u.id ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}Guardar
+                    </Btn>
+                  </td>
+                </tr>
+              );
+            })}
+          </Table>
+        )}
+        <p className="mut mt-4 text-xs">Los cambios se aplican cuando el usuario recarga la página o vuelve a iniciar sesión. Si un usuario no tiene permisos guardados, se usan los módulos por defecto de su rol.</p>
+      </Card>
     </div>
   );
 }
@@ -732,18 +912,37 @@ function Private({ session }) {
     </div>
   );
 
-  const rk = normalizeRol(perfil.rol);
-  const R = ROLES[rk] || { label: `Rol "${perfil.rol}"`, tabs: [['dashboard', 'Indicadores', LayoutDashboard]] };
-  const cur = R.tabs.some(([id]) => id === tab) ? tab : R.tabs[0][0];
+  const isSuper = isSuperProfile(perfil);
+  const rk = isSuper ? 'admin' : normalizeRol(perfil.rol); // el SuperAdmin conserva las capacidades del Admin
+  const mods = modulosEfectivos(perfil);
+  const visibles = TABS.filter(([, , , m]) => mods.includes(m));
+  const tabs = isSuper ? [...visibles, ['panel', 'Panel de Control / Permisos', SlidersHorizontal, null]] : visibles;
+
+  if (!tabs.length) return (
+    <div className="grid min-h-screen place-items-center px-4">
+      <div className="neo max-w-md p-8 text-center">
+        <Lock className="mx-auto mb-3" style={{ color: '#ff4d6d' }} size={30} />
+        <h2 className="text-lg font-bold">Sin módulos habilitados</h2>
+        <p className="mut mt-2 text-sm">Su usuario no tiene acceso a ningún módulo. Solicite al administrador que le asigne permisos.</p>
+        <Btn v="ghost" onClick={signOut} className="mt-5"><LogOut size={15} />Cerrar sesión</Btn>
+      </div>
+    </div>
+  );
+
+  const cur = tabs.some(([id]) => id === tab) ? tab : tabs[0][0];
+  const rolLabel = isSuper ? ROLES.superadmin.label : (ROLES[rk]?.label || `Rol "${perfil.rol}"`);
   const urgentes = store.ordenes.rows.filter((o) => o.estado === 'Abierta' && daysTo(o.fecha_prometida) !== null && daysTo(o.fecha_prometida) <= 2);
   const views = {
-    dashboard: <Dashboard store={store} />, ops: <Ops store={store} can={rk === 'admin'} perfil={perfil} />, maquila: <Maquila store={store} />, nomina: <Nomina store={store} />,
-    inventario: <Inventario store={store} canEdit={rk === 'admin'} />, finanzas: <Finanzas store={store} />, calc: <Calc store={store} />,
-    logistica: <Logistica store={store} />, calidad: <Calidad store={store} role={rk} />, taller: <Taller store={store} />,
+    dashboard: <Dashboard store={store} />, ops: <Ops store={store} can={rk === 'admin'} perfil={perfil} />, calc: <Calc store={store} />,
+    maquila: <Maquila store={store} />, nomina: <Nomina store={store} />,
+    inventario: <Inventario store={store} canEdit={rk === 'admin'} />, consumos: <Calidad store={store} role={rk} part="consumos" />,
+    finanzas: <Finanzas store={store} />, gastos: <Logistica store={store} part="gastos" />, traslados: <Logistica store={store} part="traslados" />,
+    calidad: <Calidad store={store} role={rk} part="calidad" />, taller: <Taller store={store} />,
+    panel: isSuper ? <PanelControl /> : null,
   };
   return (
     <>
-      {urgentes.length > 0 && (
+      {urgentes.length > 0 && mods.includes('ordenes') && (
         <div role="alert" className="alert-pulse px-4 py-2.5 text-sm font-bold text-white" style={{ background: 'linear-gradient(90deg,#ff2d55,#ff4d6d)' }}>
           <AlertTriangle size={16} className="mr-1 inline" />
           Entrega crítica: {urgentes.map((o) => { const d = daysTo(o.fecha_prometida); return `${o.codigo || `OP #${o.id}`} (${d < 0 ? `atrasada ${-d} d` : d + ' d'})`; }).join(' · ')}
@@ -752,14 +951,15 @@ function Private({ session }) {
       <header className="mx-auto max-w-7xl px-4 pt-5 sm:px-6">
         <div className="neo flex flex-wrap items-center justify-between gap-3 px-5 py-3">
           <div className="flex items-center gap-3">
-            <span className="neo-icon"><Factory size={17} /></span>
-            <div><p className="glow-t text-lg font-extrabold leading-tight">Planta OP</p><p className="mut text-xs">{perfil.nombre} · {R.label}</p></div>
+            <span className="neo-icon" style={isSuper ? { color: '#00e676' } : undefined}>{isSuper ? <Code2 size={17} /> : <Factory size={17} />}</span>
+            <div><p className="glow-t text-lg font-extrabold leading-tight">Planta OP</p><p className="mut text-xs">{perfil.nombre} · {rolLabel}</p></div>
           </div>
           <Btn v="ghost" onClick={signOut}><LogOut size={15} />Cerrar sesión</Btn>
         </div>
         <nav className="tabs mt-4 flex gap-1 overflow-x-auto">
-          {R.tabs.map(([id, label, I]) => (
-            <button key={id} onClick={() => setTab(id)} className={cx('tab', cur === id && 'tab-on')}><I size={15} />{label}</button>
+          {tabs.map(([id, label, I]) => (
+            <button key={id} onClick={() => setTab(id)} className={cx('tab', cur === id && 'tab-on')}
+              style={id === 'panel' && cur !== id ? { color: '#00e676' } : undefined}><I size={15} />{label}</button>
           ))}
         </nav>
       </header>
@@ -771,6 +971,8 @@ function Private({ session }) {
 /* ───────────── App (puerta de autenticación) ───────────── */
 export default function App() {
   const [session, setSession] = useState(undefined); // undefined = comprobando
+  const [prog, setProg] = useState(false);   // modo de acceso Programador en el login
+  const [notice, setNotice] = useState('');  // aviso que sobrevive al cierre de sesión forzado
 
   useEffect(() => {
     if (!supabase) return;
@@ -791,5 +993,5 @@ export default function App() {
     <Shell><div className="grid min-h-screen place-items-center"><Loader2 className="animate-spin" style={{ color: '#00f2fe' }} /></div></Shell>
   );
 
-  return <Shell>{session ? <Private key={session.user.id} session={session} /> : <Login />}</Shell>;
+  return <Shell>{session ? <Private key={session.user.id} session={session} /> : <Login prog={prog} setProg={setProg} notice={notice} setNotice={setNotice} />}</Shell>;
 }
